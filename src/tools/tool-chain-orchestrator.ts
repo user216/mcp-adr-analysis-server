@@ -1,13 +1,15 @@
 /**
  * Tool Chain Orchestrator - AI-Powered Dynamic Tool Sequencing
  *
- * Uses OpenRouter.ai to intelligently analyze user requests and generate
- * structured tool execution plans for the calling LLM to execute.
+ * Uses multi-provider AI (OpenRouter, Azure AI Foundry, OpenAI) to intelligently
+ * analyze user requests and generate structured tool execution plans for the
+ * calling LLM to execute.
  */
 
 import { z } from 'zod';
 import { McpAdrError } from '../types/index.js';
 import { loadAIConfig, isAIExecutionEnabled, getRecommendedModel } from '../config/ai-config.js';
+import { getAIExecutor } from '../utils/ai-executor.js';
 import { KnowledgeGraphManager } from '../utils/knowledge-graph-manager.js';
 
 // Tool chain step schema
@@ -233,33 +235,20 @@ ${
 Generate the optimal tool execution plan.`;
 
   try {
-    // Call OpenRouter.ai for intelligent planning
-    const response = await fetch(aiConfig.baseURL + '/chat/completions', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${aiConfig.apiKey}`,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': aiConfig.siteUrl || '',
-        'X-Title': aiConfig.siteName || '',
-      },
-      body: JSON.stringify({
+    // Use AI Executor for provider-agnostic AI calls
+    const executor = getAIExecutor();
+    const result = await executor.executeStructuredPrompt<typeof rawPlan>(
+      userPrompt,
+      undefined,
+      {
         model: getRecommendedModel('analysis'),
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt },
-        ],
         temperature: 0.1, // Low temperature for consistent planning
-        max_tokens: aiConfig.maxTokens,
-        response_format: { type: 'json_object' },
-      }),
-    });
+        maxTokens: aiConfig.maxTokens,
+        systemPrompt,
+      }
+    );
 
-    if (!response.ok) {
-      throw new Error(`OpenRouter API error: ${response.status} ${response.statusText}`);
-    }
-
-    const result = await response.json();
-    const planContent = result.choices?.[0]?.message?.content;
+    const planContent = result.raw.content;
 
     if (!planContent) {
       throw new Error('No plan generated from AI response');
@@ -370,28 +359,26 @@ Return JSON with:
 }`;
 
   try {
-    const response = await fetch(aiConfig.baseURL + '/chat/completions', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${aiConfig.apiKey}`,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': aiConfig.siteUrl || '',
-        'X-Title': aiConfig.siteName || '',
-      },
-      body: JSON.stringify({
+    // Use AI Executor for provider-agnostic AI calls
+    const executor = getAIExecutor();
+    const result = await executor.executeStructuredPrompt<{
+      intent: string;
+      category: string;
+      complexity: 'simple' | 'moderate' | 'complex';
+      suggestedTools: string[];
+      confidence: number;
+    }>(
+      `Analyze this request: "${args.userRequest}"`,
+      undefined,
+      {
         model: getRecommendedModel('quick-analysis', true), // Use cost-effective model
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: `Analyze this request: "${args.userRequest}"` },
-        ],
         temperature: 0.1,
-        max_tokens: 500,
-        response_format: { type: 'json_object' },
-      }),
-    });
+        maxTokens: 500,
+        systemPrompt,
+      }
+    );
 
-    const result = await response.json();
-    const analysisContent = result.choices?.[0]?.message?.content;
+    const analysisContent = result.raw.content;
 
     if (analysisContent) {
       return JSON.parse(analysisContent);

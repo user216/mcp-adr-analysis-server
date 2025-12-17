@@ -1,23 +1,31 @@
 /**
- * AI Configuration for OpenRouter.ai Integration
+ * AI Configuration for Multi-Provider Integration
  *
  * This module handles configuration for AI execution capabilities,
- * allowing the MCP server to execute prompts internally and return
+ * supporting multiple providers: OpenRouter.ai, Azure AI Foundry, and OpenAI.
+ * Allows the MCP server to execute prompts internally and return
  * actual results instead of prompts.
  */
 
+/**
+ * Supported AI providers
+ */
+export type AIProvider = 'openrouter' | 'azure' | 'openai';
+
 export interface AIConfig {
-  /** OpenRouter API key for authentication */
+  /** AI provider to use */
+  provider: AIProvider;
+  /** API key for authentication (provider-specific) */
   apiKey: string;
-  /** Base URL for OpenRouter API */
+  /** Base URL for API (auto-configured per provider) */
   baseURL: string;
   /** Default AI model to use for prompt execution */
   defaultModel: string;
   /** Execution mode: 'full' executes prompts, 'prompt-only' returns prompts */
   executionMode: 'full' | 'prompt-only';
-  /** Site URL for OpenRouter rankings (optional) */
+  /** Site URL for OpenRouter rankings (optional, OpenRouter only) */
   siteUrl?: string;
-  /** Site name for OpenRouter rankings (optional) */
+  /** Site name for OpenRouter rankings (optional, OpenRouter only) */
   siteName?: string;
   /** Request timeout in milliseconds */
   timeout: number;
@@ -31,6 +39,12 @@ export interface AIConfig {
   cacheEnabled: boolean;
   /** Cache TTL in seconds */
   cacheTTL: number;
+  /** Azure OpenAI endpoint URL (Azure only) */
+  azureEndpoint?: string;
+  /** Azure OpenAI deployment name (Azure only) */
+  azureDeployment?: string;
+  /** Azure OpenAI API version (Azure only) */
+  azureApiVersion?: string;
 }
 
 export interface ModelConfig {
@@ -95,10 +109,12 @@ export const AVAILABLE_MODELS: Record<string, ModelConfig> = {
 /**
  * Default AI configuration
  */
-export const DEFAULT_AI_CONFIG: Omit<AIConfig, 'siteUrl' | 'siteName'> & {
+export const DEFAULT_AI_CONFIG: Omit<AIConfig, 'siteUrl' | 'siteName' | 'azureEndpoint' | 'azureDeployment' | 'azureApiVersion'> & {
   siteUrl: string;
   siteName: string;
+  azureApiVersion: string;
 } = {
+  provider: 'openrouter',
   apiKey: '',
   baseURL: 'https://openrouter.ai/api/v1',
   defaultModel: 'anthropic/claude-3-sonnet',
@@ -111,16 +127,54 @@ export const DEFAULT_AI_CONFIG: Omit<AIConfig, 'siteUrl' | 'siteName'> & {
   maxTokens: 4000,
   cacheEnabled: true,
   cacheTTL: 3600, // 1 hour
+  azureApiVersion: '2024-08-01-preview',
 };
 
 /**
- * Load AI configuration from environment variables
+ * Load AI configuration from environment variables with provider-specific validation
  */
 export function loadAIConfig(): AIConfig {
+  const provider = (process.env['AI_PROVIDER'] as AIProvider) || 'openrouter';
+  
+  // Provider-specific configuration
+  let apiKey: string;
+  let baseURL: string;
+  let defaultModel: string;
+  let azureEndpoint: string | undefined;
+  let azureDeployment: string | undefined;
+  let azureApiVersion: string | undefined;
+
+  switch (provider) {
+    case 'azure':
+      apiKey = process.env['AZURE_OPENAI_API_KEY'] || '';
+      azureEndpoint = process.env['AZURE_OPENAI_ENDPOINT'] || '';
+      azureDeployment = process.env['AZURE_OPENAI_DEPLOYMENT'] || '';
+      azureApiVersion = process.env['AZURE_OPENAI_API_VERSION'] || DEFAULT_AI_CONFIG.azureApiVersion;
+      // Azure base URL is constructed from endpoint
+      baseURL = azureEndpoint ? `${azureEndpoint.replace(/\/$/, '')}/openai/deployments/${azureDeployment}` : '';
+      // Azure uses deployment name, not model name in API calls
+      defaultModel = azureDeployment || process.env['AI_MODEL'] || 'gpt-4';
+      break;
+    
+    case 'openai':
+      apiKey = process.env['OPENAI_API_KEY'] || '';
+      baseURL = 'https://api.openai.com/v1';
+      defaultModel = process.env['AI_MODEL'] || 'gpt-4o';
+      break;
+    
+    case 'openrouter':
+    default:
+      apiKey = process.env['OPENROUTER_API_KEY'] || '';
+      baseURL = 'https://openrouter.ai/api/v1';
+      defaultModel = process.env['AI_MODEL'] || DEFAULT_AI_CONFIG.defaultModel;
+      break;
+  }
+
   const config: AIConfig = {
-    apiKey: process.env['OPENROUTER_API_KEY'] || '',
-    baseURL: 'https://openrouter.ai/api/v1',
-    defaultModel: process.env['AI_MODEL'] || DEFAULT_AI_CONFIG.defaultModel,
+    provider,
+    apiKey,
+    baseURL,
+    defaultModel,
     executionMode:
       (process.env['EXECUTION_MODE'] as 'full' | 'prompt-only') || DEFAULT_AI_CONFIG.executionMode,
     siteUrl: process.env['SITE_URL'] || DEFAULT_AI_CONFIG.siteUrl,
@@ -131,20 +185,77 @@ export function loadAIConfig(): AIConfig {
     maxTokens: parseInt(process.env['AI_MAX_TOKENS'] || '') || DEFAULT_AI_CONFIG.maxTokens,
     cacheEnabled: process.env['AI_CACHE_ENABLED'] !== 'false',
     cacheTTL: parseInt(process.env['AI_CACHE_TTL'] || '') || DEFAULT_AI_CONFIG.cacheTTL,
+    // Only include Azure fields if they have values (avoid undefined with exactOptionalPropertyTypes)
+    ...(azureEndpoint ? { azureEndpoint } : {}),
+    ...(azureDeployment ? { azureDeployment } : {}),
+    ...(azureApiVersion ? { azureApiVersion } : {}),
   };
+
+  // Validate provider-specific requirements
+  validateProviderConfig(config);
 
   return config;
 }
 
 /**
- * Validate AI configuration
+ * Validate provider-specific configuration requirements
+ * Throws descriptive errors for missing required environment variables
  */
-export function validateAIConfig(config: AIConfig): void {
-  if (config.executionMode === 'full' && !config.apiKey) {
-    throw new Error('OPENROUTER_API_KEY is required when execution mode is "full"');
+export function validateProviderConfig(config: AIConfig): void {
+  if (config.executionMode !== 'full') {
+    // No validation needed for prompt-only mode
+    return;
   }
 
-  if (!AVAILABLE_MODELS[config.defaultModel.replace('anthropic/', '').replace('openai/', '')]) {
+  switch (config.provider) {
+    case 'azure':
+      const missingAzureVars: string[] = [];
+      if (!config.azureEndpoint) missingAzureVars.push('AZURE_OPENAI_ENDPOINT');
+      if (!config.apiKey) missingAzureVars.push('AZURE_OPENAI_API_KEY');
+      if (!config.azureDeployment) missingAzureVars.push('AZURE_OPENAI_DEPLOYMENT');
+      
+      if (missingAzureVars.length > 0) {
+        throw new Error(
+          `Azure AI Foundry requires the following environment variables: ${missingAzureVars.join(', ')}. ` +
+          `Set AI_PROVIDER=openrouter or AI_PROVIDER=openai to use a different provider, ` +
+          `or set EXECUTION_MODE=prompt-only to disable AI execution.`
+        );
+      }
+      break;
+    
+    case 'openai':
+      if (!config.apiKey) {
+        throw new Error(
+          `OpenAI requires OPENAI_API_KEY environment variable. ` +
+          `Set AI_PROVIDER=openrouter or AI_PROVIDER=azure to use a different provider, ` +
+          `or set EXECUTION_MODE=prompt-only to disable AI execution.`
+        );
+      }
+      break;
+    
+    case 'openrouter':
+    default:
+      if (!config.apiKey) {
+        throw new Error(
+          `OpenRouter requires OPENROUTER_API_KEY environment variable. ` +
+          `Get your API key at https://openrouter.ai/keys. ` +
+          `Set AI_PROVIDER=azure or AI_PROVIDER=openai to use a different provider, ` +
+          `or set EXECUTION_MODE=prompt-only to disable AI execution.`
+        );
+      }
+      break;
+  }
+}
+
+/**
+ * Validate AI configuration (common validation for all providers)
+ */
+export function validateAIConfig(config: AIConfig): void {
+  // Provider-specific validation is done in validateProviderConfig
+  // This function validates common parameters
+
+  if (!AVAILABLE_MODELS[config.defaultModel.replace('anthropic/', '').replace('openai/', '')] && 
+      config.provider === 'openrouter') {
     console.warn(`Unknown model: ${config.defaultModel}. Using default.`);
   }
 

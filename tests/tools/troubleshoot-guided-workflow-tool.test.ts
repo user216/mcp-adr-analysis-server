@@ -826,10 +826,10 @@ describe('Troubleshoot Guided Workflow Tool', () => {
         },
       };
 
-      // Should fall back to prompt-only mode and work
-      const result = await troubleshootGuidedWorkflow(input);
-      expect(result).toBeDefined();
-      expect(result.content[0].text).toContain('Test Plan Generation (Fallback)');
+      // Should throw an error because EXECUTION_MODE=full requires OPENROUTER_API_KEY
+      await expect(troubleshootGuidedWorkflow(input)).rejects.toThrow(
+        /OpenRouter requires OPENROUTER_API_KEY environment variable/
+      );
 
       // Restore environment
       if (originalEnv) {

@@ -115,18 +115,29 @@ describe('AI Configuration', () => {
   // ============================================================================
 
   describe('loadAIConfig function', () => {
-    test('returns default config when no environment variables set', () => {
+    test('returns default config when no environment variables set (prompt-only mode)', () => {
       // Clear relevant environment variables
       delete process.env['OPENROUTER_API_KEY'];
       delete process.env['AI_MODEL'];
-      delete process.env['EXECUTION_MODE'];
+      delete process.env['AI_PROVIDER'];
+      // Set prompt-only mode to avoid validation errors
+      process.env['EXECUTION_MODE'] = 'prompt-only';
 
       const config = loadAIConfig();
 
+      expect(config.provider).toBe('openrouter');
       expect(config.apiKey).toBe('');
       expect(config.baseURL).toBe('https://openrouter.ai/api/v1');
       expect(config.defaultModel).toBe(DEFAULT_AI_CONFIG.defaultModel);
-      expect(config.executionMode).toBe(DEFAULT_AI_CONFIG.executionMode);
+      expect(config.executionMode).toBe('prompt-only');
+    });
+
+    test('throws error when API key missing in full execution mode', () => {
+      delete process.env['OPENROUTER_API_KEY'];
+      delete process.env['AI_PROVIDER'];
+      process.env['EXECUTION_MODE'] = 'full';
+
+      expect(() => loadAIConfig()).toThrow('OpenRouter requires OPENROUTER_API_KEY');
     });
 
     test('loads configuration from environment variables', () => {
@@ -187,6 +198,7 @@ describe('AI Configuration', () => {
 
     beforeEach(() => {
       validConfig = {
+        provider: 'openrouter',
         apiKey: 'test-key',
         baseURL: 'https://openrouter.ai/api/v1',
         defaultModel: 'anthropic/claude-3-sonnet',
@@ -206,13 +218,14 @@ describe('AI Configuration', () => {
       expect(() => validateAIConfig(validConfig)).not.toThrow();
     });
 
-    test('throws error when API key missing in full execution mode', () => {
+    test('validateAIConfig does not check API key (provider validation does)', () => {
+      // validateAIConfig now only validates common parameters
+      // Provider-specific validation is done in validateProviderConfig
       validConfig.apiKey = '';
       validConfig.executionMode = 'full';
 
-      expect(() => validateAIConfig(validConfig)).toThrow(
-        'OPENROUTER_API_KEY is required when execution mode is "full"'
-      );
+      // This should NOT throw - API key validation moved to validateProviderConfig
+      expect(() => validateAIConfig(validConfig)).not.toThrow();
     });
 
     test('allows empty API key in prompt-only mode', () => {
@@ -222,12 +235,25 @@ describe('AI Configuration', () => {
       expect(() => validateAIConfig(validConfig)).not.toThrow();
     });
 
-    test('warns about unknown model but does not throw', () => {
+    test('warns about unknown model but does not throw (for openrouter only)', () => {
       const consoleSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+      validConfig.provider = 'openrouter';
       validConfig.defaultModel = 'unknown/model';
 
       expect(() => validateAIConfig(validConfig)).not.toThrow();
       expect(consoleSpy).toHaveBeenCalledWith('Unknown model: unknown/model. Using default.');
+
+      consoleSpy.mockRestore();
+    });
+
+    test('does not warn about unknown model for azure provider', () => {
+      const consoleSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+      validConfig.provider = 'azure';
+      validConfig.defaultModel = 'my-custom-deployment';
+
+      expect(() => validateAIConfig(validConfig)).not.toThrow();
+      // Azure uses deployment names, not model names - no warning expected
+      expect(consoleSpy).not.toHaveBeenCalled();
 
       consoleSpy.mockRestore();
     });
@@ -419,15 +445,16 @@ describe('AI Configuration', () => {
       expect(() => getModelConfig(undefined as any)).toThrow();
     });
 
-    test('loadAIConfig handles missing process.env gracefully', () => {
+    test('loadAIConfig handles missing process.env gracefully in prompt-only mode', () => {
       const originalProcessEnv = process.env;
-      // Simulate missing process.env properties
-      process.env = {};
+      // Simulate missing process.env properties but set prompt-only mode
+      process.env = { EXECUTION_MODE: 'prompt-only' };
 
       expect(() => loadAIConfig()).not.toThrow();
       const config = loadAIConfig();
       expect(config).toBeDefined();
       expect(config.apiKey).toBe('');
+      expect(config.provider).toBe('openrouter');
 
       process.env = originalProcessEnv;
     });
@@ -476,6 +503,153 @@ describe('AI Configuration', () => {
       const config = loadAIConfig();
       expect(() => validateAIConfig(config)).not.toThrow();
       expect(isAIExecutionEnabled(config)).toBe(false);
+    });
+  });
+
+  // ============================================================================
+  // Multi-Provider Tests
+  // ============================================================================
+
+  describe('Multi-Provider Support', () => {
+    describe('OpenRouter Provider', () => {
+      test('loads openrouter config correctly', () => {
+        process.env['AI_PROVIDER'] = 'openrouter';
+        process.env['OPENROUTER_API_KEY'] = 'or-test-key';
+        process.env['AI_MODEL'] = 'anthropic/claude-3-sonnet';
+
+        const config = loadAIConfig();
+
+        expect(config.provider).toBe('openrouter');
+        expect(config.apiKey).toBe('or-test-key');
+        expect(config.baseURL).toBe('https://openrouter.ai/api/v1');
+        expect(config.defaultModel).toBe('anthropic/claude-3-sonnet');
+      });
+
+      test('throws error when OPENROUTER_API_KEY missing in full mode', () => {
+        process.env['AI_PROVIDER'] = 'openrouter';
+        process.env['EXECUTION_MODE'] = 'full';
+        delete process.env['OPENROUTER_API_KEY'];
+
+        expect(() => loadAIConfig()).toThrow('OpenRouter requires OPENROUTER_API_KEY');
+      });
+    });
+
+    describe('Azure Provider', () => {
+      test('loads azure config correctly', () => {
+        process.env['AI_PROVIDER'] = 'azure';
+        process.env['AZURE_OPENAI_ENDPOINT'] = 'https://my-resource.openai.azure.com';
+        process.env['AZURE_OPENAI_API_KEY'] = 'azure-test-key';
+        process.env['AZURE_OPENAI_DEPLOYMENT'] = 'gpt-4-turbo';
+        process.env['AZURE_OPENAI_API_VERSION'] = '2024-02-01';
+
+        const config = loadAIConfig();
+
+        expect(config.provider).toBe('azure');
+        expect(config.apiKey).toBe('azure-test-key');
+        expect(config.azureEndpoint).toBe('https://my-resource.openai.azure.com');
+        expect(config.azureDeployment).toBe('gpt-4-turbo');
+        expect(config.azureApiVersion).toBe('2024-02-01');
+        expect(config.baseURL).toContain('openai/deployments/gpt-4-turbo');
+      });
+
+      test('uses default API version when not specified', () => {
+        process.env['AI_PROVIDER'] = 'azure';
+        process.env['AZURE_OPENAI_ENDPOINT'] = 'https://my-resource.openai.azure.com';
+        process.env['AZURE_OPENAI_API_KEY'] = 'azure-test-key';
+        process.env['AZURE_OPENAI_DEPLOYMENT'] = 'gpt-4-turbo';
+        delete process.env['AZURE_OPENAI_API_VERSION'];
+
+        const config = loadAIConfig();
+
+        expect(config.azureApiVersion).toBe('2024-08-01-preview');
+      });
+
+      test('throws error when AZURE_OPENAI_ENDPOINT missing', () => {
+        process.env['AI_PROVIDER'] = 'azure';
+        process.env['EXECUTION_MODE'] = 'full';
+        delete process.env['AZURE_OPENAI_ENDPOINT'];
+        process.env['AZURE_OPENAI_API_KEY'] = 'azure-test-key';
+        process.env['AZURE_OPENAI_DEPLOYMENT'] = 'gpt-4-turbo';
+
+        expect(() => loadAIConfig()).toThrow('Azure AI Foundry requires');
+        expect(() => loadAIConfig()).toThrow('AZURE_OPENAI_ENDPOINT');
+      });
+
+      test('throws error when AZURE_OPENAI_API_KEY missing', () => {
+        process.env['AI_PROVIDER'] = 'azure';
+        process.env['EXECUTION_MODE'] = 'full';
+        process.env['AZURE_OPENAI_ENDPOINT'] = 'https://my-resource.openai.azure.com';
+        delete process.env['AZURE_OPENAI_API_KEY'];
+        process.env['AZURE_OPENAI_DEPLOYMENT'] = 'gpt-4-turbo';
+
+        expect(() => loadAIConfig()).toThrow('AZURE_OPENAI_API_KEY');
+      });
+
+      test('throws error when AZURE_OPENAI_DEPLOYMENT missing', () => {
+        process.env['AI_PROVIDER'] = 'azure';
+        process.env['EXECUTION_MODE'] = 'full';
+        process.env['AZURE_OPENAI_ENDPOINT'] = 'https://my-resource.openai.azure.com';
+        process.env['AZURE_OPENAI_API_KEY'] = 'azure-test-key';
+        delete process.env['AZURE_OPENAI_DEPLOYMENT'];
+
+        expect(() => loadAIConfig()).toThrow('AZURE_OPENAI_DEPLOYMENT');
+      });
+
+      test('allows empty Azure config in prompt-only mode', () => {
+        process.env['AI_PROVIDER'] = 'azure';
+        process.env['EXECUTION_MODE'] = 'prompt-only';
+        delete process.env['AZURE_OPENAI_ENDPOINT'];
+        delete process.env['AZURE_OPENAI_API_KEY'];
+        delete process.env['AZURE_OPENAI_DEPLOYMENT'];
+
+        expect(() => loadAIConfig()).not.toThrow();
+        const config = loadAIConfig();
+        expect(config.provider).toBe('azure');
+      });
+    });
+
+    describe('OpenAI Provider', () => {
+      test('loads openai config correctly', () => {
+        process.env['AI_PROVIDER'] = 'openai';
+        process.env['OPENAI_API_KEY'] = 'openai-test-key';
+        process.env['AI_MODEL'] = 'gpt-4o-mini';
+
+        const config = loadAIConfig();
+
+        expect(config.provider).toBe('openai');
+        expect(config.apiKey).toBe('openai-test-key');
+        expect(config.baseURL).toBe('https://api.openai.com/v1');
+        expect(config.defaultModel).toBe('gpt-4o-mini');
+      });
+
+      test('uses default model gpt-4o when AI_MODEL not set', () => {
+        process.env['AI_PROVIDER'] = 'openai';
+        process.env['OPENAI_API_KEY'] = 'openai-test-key';
+        delete process.env['AI_MODEL'];
+
+        const config = loadAIConfig();
+
+        expect(config.defaultModel).toBe('gpt-4o');
+      });
+
+      test('throws error when OPENAI_API_KEY missing in full mode', () => {
+        process.env['AI_PROVIDER'] = 'openai';
+        process.env['EXECUTION_MODE'] = 'full';
+        delete process.env['OPENAI_API_KEY'];
+
+        expect(() => loadAIConfig()).toThrow('OpenAI requires OPENAI_API_KEY');
+      });
+    });
+
+    describe('Provider Defaults', () => {
+      test('defaults to openrouter when AI_PROVIDER not set', () => {
+        delete process.env['AI_PROVIDER'];
+        process.env['OPENROUTER_API_KEY'] = 'default-key';
+
+        const config = loadAIConfig();
+
+        expect(config.provider).toBe('openrouter');
+      });
     });
   });
 });

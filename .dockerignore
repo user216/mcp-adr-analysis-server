@@ -1,0 +1,72 @@
+# Git
+.git
+.gitignore
+
+# Dependencies
+node_modules
+
+# Build outputs (we rebuild in container)
+dist
+coverage
+
+# Cache directories
+.mcp-adr-cache
+.tsbuildinfo
+*.tsbuildinfo
+
+# IDE and editor files
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# Test files
+tests
+*.test.ts
+*.test.js
+jest.config.js
+jest.config.cjs
+
+# Documentation (separate container)
+docs
+*.md
+!README.md
+
+# Archives and samples
+archive
+sample-project
+custom
+
+# Scripts (not needed in production)
+scripts
+
+# Reports and test results
+reports
+test-results
+mcp-test-results.json
+
+# Config files not needed in container
+.eslintrc*
+eslint.config.js
+.prettierrc*
+.commitlintrc*
+.husky
+typedoc.json
+docker-compose*.yml
+Makefile
+
+# Environment files (secrets should be injected)
+.env
+.env.*
+
+# Playbooks and Ansible
+playbooks
+ansible.cfg
+ansible-requirements.yml
+inventory.ini
+
+# Temporary files
+*.log
+*.tmp
+tmp

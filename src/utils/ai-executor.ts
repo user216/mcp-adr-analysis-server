@@ -1,11 +1,15 @@
 /**
- * AI Executor Service for OpenRouter.ai Integration
+ * AI Executor Service for Multi-Provider Integration
  *
- * This service handles the execution of prompts using OpenRouter.ai,
- * transforming the MCP server from returning prompts to returning actual results.
+ * This service handles the execution of prompts using multiple AI providers:
+ * - OpenRouter.ai (default)
+ * - Azure AI Foundry (Azure OpenAI)
+ * - OpenAI Direct
+ *
+ * Transforms the MCP server from returning prompts to returning actual results.
  */
 
-import OpenAI from 'openai';
+import OpenAI, { AzureOpenAI } from 'openai';
 import {
   AIConfig,
   loadAIConfig,
@@ -42,17 +46,19 @@ export interface AIExecutionError extends Error {
 /**
  * AI Executor Service Class
  *
- * @description Core service for executing AI prompts through OpenRouter.ai integration.
- * Transforms the MCP server from returning prompts to returning actual AI-generated results.
+ * @description Core service for executing AI prompts through multiple providers:
+ * OpenRouter.ai, Azure AI Foundry, and OpenAI. Transforms the MCP server from
+ * returning prompts to returning actual AI-generated results.
  * Includes caching, retry logic, and comprehensive error handling.
  *
  * @example
  * ```typescript
  * // Initialize with custom configuration
  * const executor = new AIExecutor({
+ *   provider: 'azure',
  *   apiKey: 'your-api-key',
- *   model: 'anthropic/claude-3-sonnet',
- *   maxTokens: 4000
+ *   azureEndpoint: 'https://your-resource.openai.azure.com',
+ *   azureDeployment: 'gpt-4-turbo'
  * });
  *
  * // Execute a prompt
@@ -79,7 +85,7 @@ export interface AIExecutionError extends Error {
  * @category Core
  */
 export class AIExecutor {
-  private client: OpenAI | null = null;
+  private client: OpenAI | AzureOpenAI | null = null;
   private config: AIConfig;
   private cache: Map<string, { result: AIExecutionResult; expiry: number }> = new Map();
 
@@ -89,7 +95,7 @@ export class AIExecutor {
   }
 
   /**
-   * Initialize OpenAI client for OpenRouter
+   * Initialize OpenAI/Azure client based on provider
    */
   private initializeClient(): void {
     if (!isAIExecutionEnabled(this.config)) {
@@ -100,18 +106,49 @@ export class AIExecutor {
     try {
       validateAIConfig(this.config);
 
-      this.client = new OpenAI({
-        baseURL: this.config.baseURL,
-        apiKey: this.config.apiKey,
-        timeout: this.config.timeout,
-        maxRetries: this.config.maxRetries,
-        defaultHeaders: {
-          'HTTP-Referer': this.config.siteUrl || '',
-          'X-Title': this.config.siteName || '',
-        },
-      });
+      switch (this.config.provider) {
+        case 'azure':
+          // Use AzureOpenAI client for Azure AI Foundry
+          this.client = new AzureOpenAI({
+            endpoint: this.config.azureEndpoint,
+            apiKey: this.config.apiKey,
+            apiVersion: this.config.azureApiVersion || '2024-08-01-preview',
+            deployment: this.config.azureDeployment,
+            timeout: this.config.timeout,
+            maxRetries: this.config.maxRetries,
+          });
+          // Use stderr to avoid corrupting MCP JSON-RPC on stdout
+          console.error(`[INFO] AI Executor initialized with Azure AI Foundry, deployment: ${this.config.azureDeployment}`);
+          break;
 
-      console.log(`AI Executor initialized with model: ${this.config.defaultModel}`);
+        case 'openai':
+          // Use standard OpenAI client for OpenAI Direct
+          this.client = new OpenAI({
+            apiKey: this.config.apiKey,
+            timeout: this.config.timeout,
+            maxRetries: this.config.maxRetries,
+          });
+          // Use stderr to avoid corrupting MCP JSON-RPC on stdout
+          console.error(`[INFO] AI Executor initialized with OpenAI, model: ${this.config.defaultModel}`);
+          break;
+
+        case 'openrouter':
+        default:
+          // Use OpenAI client with custom baseURL for OpenRouter
+          this.client = new OpenAI({
+            baseURL: this.config.baseURL,
+            apiKey: this.config.apiKey,
+            timeout: this.config.timeout,
+            maxRetries: this.config.maxRetries,
+            defaultHeaders: {
+              'HTTP-Referer': this.config.siteUrl || '',
+              'X-Title': this.config.siteName || '',
+            },
+          });
+          // Use stderr to avoid corrupting MCP JSON-RPC on stdout
+          console.error(`[INFO] AI Executor initialized with OpenRouter, model: ${this.config.defaultModel}`);
+          break;
+      }
     } catch (error) {
       console.error('Failed to initialize AI Executor:', error);
       this.client = null;

@@ -20,7 +20,7 @@ graph TD
     J --> K[Claude-3-Sonnet]
     J --> L[GPT-4o]
     
-    C --> M[ADR Generator]
+    C --> M[ADR-Agent]
     C --> N[Security Scanner]
     C --> O[Deployment Validator]
     

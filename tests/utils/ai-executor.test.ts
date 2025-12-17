@@ -39,13 +39,15 @@ describe('AIExecutor - Simplified Tests', () => {
     }
   });
 
-  it('should handle missing API key gracefully', async () => {
-    // Test with missing API key
+  it('should handle missing API key gracefully in prompt-only mode', async () => {
+    // Test with missing API key but prompt-only mode (which doesn't require validation)
     const originalApiKey = process.env.OPENROUTER_API_KEY;
     const originalMode = process.env.EXECUTION_MODE;
+    const originalProvider = process.env.AI_PROVIDER;
 
     delete process.env.OPENROUTER_API_KEY;
-    process.env.EXECUTION_MODE = 'full';
+    delete process.env.AI_PROVIDER;
+    process.env.EXECUTION_MODE = 'prompt-only';
 
     try {
       const { AIExecutor } = await import('../../src/utils/ai-executor.js');
@@ -62,6 +64,9 @@ describe('AIExecutor - Simplified Tests', () => {
         process.env.EXECUTION_MODE = originalMode;
       } else {
         delete process.env.EXECUTION_MODE;
+      }
+      if (originalProvider !== undefined) {
+        process.env.AI_PROVIDER = originalProvider;
       }
     }
   });

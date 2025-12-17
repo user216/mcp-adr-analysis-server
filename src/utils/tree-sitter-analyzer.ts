@@ -187,10 +187,8 @@ export class TreeSitterAnalyzer {
       parser.setLanguage(Parser);
       this.parsers.set(language, parser);
     } catch (error) {
-      // Silently skip parser loading errors in test environment
-      if (process.env['NODE_ENV'] !== 'test' && process.env['JEST_WORKER_ID'] === undefined) {
-        console.warn(`Failed to load ${language} parser:`, error);
-      }
+      // Silently skip parser loading errors - tree-sitter native modules may not be available
+      // This is expected and handled gracefully with regex fallback analysis
     }
   }
 

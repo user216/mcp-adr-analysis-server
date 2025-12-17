@@ -47,8 +47,11 @@ export class EnhancedLogger {
   private maxBufferSize = 1000;
 
   constructor(config: Partial<LoggerConfig> = {}) {
+    // Read LOG_LEVEL from environment (MCP server config passes this)
+    const envLogLevel = (process.env['LOG_LEVEL']?.toLowerCase() as LogLevel) || 'info';
+    
     this.config = {
-      level: 'info',
+      level: envLogLevel,
       enableConsole: true,
       enableFile: false,
       enableStructuredLogging: true,
@@ -299,52 +302,18 @@ export class EnhancedLogger {
 
   /**
    * Write to console with appropriate formatting
+   * IMPORTANT: MCP servers MUST use stderr for all logs to avoid corrupting JSON-RPC on stdout
+   * Context/structured data is NOT logged to avoid VS Code MCP client parse warnings
    */
   private writeToConsole(entry: LogEntry): void {
     const timestamp = entry.timestamp.toISOString();
     const prefix = `[${timestamp}] [${entry.level.toUpperCase()}] [${entry.component}]`;
 
-    if (this.config.enableStructuredLogging) {
-      const logData = {
-        ...entry,
-        timestamp: timestamp,
-      };
+    // Simple string-only output for MCP compatibility - NO JSON objects
+    const message = `${prefix} ${entry.message}`;
 
-      switch (entry.level) {
-        case 'critical':
-        case 'error':
-          console.error(prefix, entry.message, logData);
-          break;
-        case 'warn':
-          console.warn(prefix, entry.message, logData);
-          break;
-        case 'debug':
-          console.debug(prefix, entry.message, logData);
-          break;
-        default:
-          console.log(prefix, entry.message, logData);
-      }
-    } else {
-      const message = `${prefix} ${entry.message}`;
-
-      switch (entry.level) {
-        case 'critical':
-        case 'error':
-          console.error(message);
-          if (entry.error) {
-            console.error('Error details:', entry.error);
-          }
-          break;
-        case 'warn':
-          console.warn(message);
-          break;
-        case 'debug':
-          console.debug(message);
-          break;
-        default:
-          console.log(message);
-      }
-    }
+    // ALL logs go to stderr to avoid corrupting MCP JSON-RPC protocol on stdout
+    console.error(message);
   }
 
   /**

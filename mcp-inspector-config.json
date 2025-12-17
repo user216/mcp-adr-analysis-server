@@ -7,7 +7,9 @@
         "NODE_ENV": "development",
         "PROJECT_PATH": ".",
         "ADR_DIRECTORY": "docs/adrs",
-        "LOG_LEVEL": "info"
+        "LOG_LEVEL": "info",
+        "AI_PROVIDER": "azure",
+        "EXECUTION_MODE": "full"
       }
     },
     "adr-analysis-server-test": {
@@ -19,6 +21,17 @@
         "ADR_DIRECTORY": "docs/adrs",
         "LOG_LEVEL": "debug"
       }
+    },
+    "azure_ai_foundry_mcp": {
+      "command": "uvx",
+      "args": [
+        "--prerelease=allow",
+        "--from",
+        "git+https://github.com/azure-ai-foundry/mcp-foundry.git",
+        "run-azure-ai-foundry-mcp",
+        "--envFile",
+        ".env"
+      ]
     }
   }
 }
